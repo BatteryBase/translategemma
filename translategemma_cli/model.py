@@ -78,6 +78,23 @@ def get_backend(model_format: str = "auto") -> Backend:
     return "pytorch"
 
 
+def _find_local_hf_model_dir(model_size: str, quantization_bits: int = 4) -> Path | None:
+    """Return local HF model directory if weights are present (ModelScope / manual download)."""
+    hf_model_id = get_hf_model_id(model_size)
+    size_name = hf_model_id.split("/")[-1]
+    candidates = [
+        os.getenv("MODEL_LOCAL_PATH"),
+        str(get_model_path(model_size, quantization_bits, "hf")),
+        str(Path.home() / "nhwork/translategemma/models" / size_name),
+        str(Path.home() / ".cache/modelscope/hub" / hf_model_id),
+        str(Path.home() / ".cache/modelscope/hub/models" / hf_model_id),
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).joinpath("config.json").is_file():
+            return Path(candidate)
+    return None
+
+
 def is_model_ready(model_size: str | None = None, model_format: str | None = None) -> bool:
     """
     Check if the model exists.
@@ -95,7 +112,9 @@ def is_model_ready(model_size: str | None = None, model_format: str | None = Non
         gguf_path = get_model_path(size, config.quantization_bits, "gguf")
         return gguf_path.exists()
     else:
-        # Check for HF model directory
+        local_dir = _find_local_hf_model_dir(size, config.quantization_bits)
+        if local_dir is not None:
+            return True
         model_path = get_model_path(size, config.quantization_bits, "hf")
         if not model_path.exists():
             return False
@@ -524,10 +543,12 @@ def load_model(model_size: str | None = None, model_format: str | None = None) -
         return _load_gguf(size, config.quantization_bits)
     
     # HF format
-    model_path = get_model_path(size, config.quantization_bits, "hf")
+    local_dir = _find_local_hf_model_dir(size, config.quantization_bits)
+    model_path = local_dir or get_model_path(size, config.quantization_bits, "hf")
     
-    if not is_model_ready(size, "hf"):
+    if local_dir is None and not is_model_ready(size, "hf"):
         download_and_convert_model(size, config.quantization_bits, "hf")
+        model_path = get_model_path(size, config.quantization_bits, "hf")
     
     if backend == "mlx":
         return _load_mlx(model_path)
@@ -625,6 +646,26 @@ def _load_mlx(model_path: Path) -> tuple[Any, Any, Backend]:
     return model, tokenizer, "mlx"
 
 
+def _resolve_pretrained_source(model_path: Path, hf_model_id: str) -> str:
+    """Prefer local ModelScope/HF directory over remote hub."""
+    size_hint = hf_model_id.split("/")[-1]
+    candidates = [
+        os.getenv("MODEL_LOCAL_PATH"),
+        str(model_path),
+        str(Path.home() / "nhwork/translategemma/models" / size_hint),
+        str(Path.home() / ".cache/modelscope/hub" / hf_model_id),
+        str(Path.home() / ".cache/modelscope/hub/models" / hf_model_id),
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).joinpath("config.json").is_file():
+            return candidate
+    return hf_model_id
+
+
+def _is_local_model_source(source: str) -> bool:
+    return Path(source).joinpath("config.json").is_file()
+
+
 def _load_pytorch(model_path: Path) -> tuple[Any, Any, Backend]:
     """Load model using PyTorch backend."""
     try:
@@ -645,33 +686,35 @@ def _load_pytorch(model_path: Path) -> tuple[Any, Any, Backend]:
         
         device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        # Get HuggingFace model ID from model_path
         # model_path is like: ~/.cache/translate/models/translategemma-27b-it-4bit
-        model_name = model_path.name  # translategemma-27b-it-4bit
-        # Extract base name without quantization suffix
+        model_name = model_path.name
         base_name = model_name.rsplit('-', 1)[0] if model_name.endswith('bit') else model_name
         hf_model_id = f"google/{base_name}"
+        source = _resolve_pretrained_source(model_path, hf_model_id)
+        local_only = _is_local_model_source(source)
         
-        progress.update(task, description=f"Loading from {hf_model_id}...")
+        progress.update(task, description=f"Loading from {source}...")
         
-        # Load tokenizer from HuggingFace
-        tokenizer = AutoTokenizer.from_pretrained(hf_model_id)
+        load_kwargs = {"trust_remote_code": True}
+        if local_only:
+            load_kwargs["local_files_only"] = True
         
-        # Load model with bfloat16 (no quantization - more stable for TranslateGemma)
-        # Note: 27B model requires ~54GB VRAM, may need multiple GPUs
+        tokenizer = AutoTokenizer.from_pretrained(source, **load_kwargs)
+        
+        # bfloat16 full precision; 27B needs ~54GB VRAM (multi-GPU via device_map)
         if device == "cuda":
             model = AutoModelForCausalLM.from_pretrained(
-                hf_model_id,
+                source,
                 dtype=torch.bfloat16,
                 device_map="auto",
-                trust_remote_code=True,
+                **load_kwargs,
             )
         else:
             model = AutoModelForCausalLM.from_pretrained(
-                hf_model_id,
+                source,
                 torch_dtype=torch.float32,
-                trust_remote_code=True,
                 low_cpu_mem_usage=True,
+                **load_kwargs,
             )
             model = model.to(device)
         

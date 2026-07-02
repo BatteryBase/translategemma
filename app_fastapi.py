@@ -3,6 +3,31 @@ TranslateGemma Translation Service - FastAPI Version
 Supports UI, REST API, and MCP integration
 """
 import os
+
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_dotenv() -> None:
+    """Load .env from app directory; shell env vars take precedence."""
+    env_file = os.path.join(_APP_DIR, ".env")
+    if not os.path.isfile(env_file):
+        return
+    with open(env_file, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip().strip('"').strip("'")
+            if key:
+                os.environ.setdefault(key, value)
+
+
+_load_dotenv()
+# .env 里写 NVIDIA_VISIBLE_DEVICES；原生 Linux 下映射为 CUDA_VISIBLE_DEVICES
+if os.getenv("NVIDIA_VISIBLE_DEVICES") and not os.getenv("CUDA_VISIBLE_DEVICES"):
+    os.environ["CUDA_VISIBLE_DEVICES"] = os.environ["NVIDIA_VISIBLE_DEVICES"]
+
 import time
 import threading
 import gc
@@ -23,6 +48,7 @@ DEFAULT_MODEL = os.getenv("MODEL_NAME", "27b")
 DEFAULT_QUANTIZATION = int(os.getenv("QUANTIZATION", "8"))
 DEFAULT_BACKEND = os.getenv("BACKEND", "gguf")
 GPU_IDLE_TIMEOUT = int(os.getenv("GPU_IDLE_TIMEOUT", "0"))  # 0 = unload immediately after use
+MODEL_PRELOAD = os.getenv("MODEL_PRELOAD", "false").lower() in ("1", "true", "yes")
 MAX_CHUNK_LENGTH = int(os.getenv("MAX_CHUNK_LENGTH", "100"))  # 100 is safe, 150+ may cause truncation
 DEFAULT_OVERLAP = int(os.getenv("DEFAULT_OVERLAP", "0"))  # 0 = no sliding window, >0 = overlap chars
 REPETITION_PENALTY = float(os.getenv("REPETITION_PENALTY", "1.0"))  # 1.0 = no penalty, 1.1+ = reduce repetition
@@ -492,6 +518,15 @@ async def translate_stream(
 # ==================== FastAPI App ====================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if MODEL_PRELOAD:
+        loop = asyncio.get_event_loop()
+        try:
+            await loop.run_in_executor(
+                None, lambda: gpu.load(DEFAULT_MODEL, DEFAULT_QUANTIZATION)
+            )
+            print(f"[startup] Model preloaded: {DEFAULT_MODEL}-Q{DEFAULT_QUANTIZATION}")
+        except Exception as e:
+            print(f"[startup] Model preload failed: {e}")
     yield
     if gpu.unload_timer:
         gpu.unload_timer.cancel()
