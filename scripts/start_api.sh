@@ -19,7 +19,7 @@ if [[ -n "${NVIDIA_VISIBLE_DEVICES:-}" && -z "${CUDA_VISIBLE_DEVICES:-}" ]]; the
   export CUDA_VISIBLE_DEVICES="${NVIDIA_VISIBLE_DEVICES}"
 fi
 
-PORT="${PORT:-80}"
+PORT="${PORT:-8022}"
 PYTHON="$(which python)"
 UVICORN_ARGS=(app_fastapi:app --host 0.0.0.0 --port "${PORT}")
 

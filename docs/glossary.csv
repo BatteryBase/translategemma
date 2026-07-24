@@ -1,0 +1,283 @@
+﻿source,target
+锂离子电池,Li-ion Battery
+单体锂离子电池,Li-ion Cell
+方壳式锂离子电池,Prismatic Li-Ion Cell
+圆柱式锂离子电池,Cylindrical Li-Ion Cell
+扣式锂离子电池,Coin Li-ion Cell
+刀片式锂离子电池,Blade Li-ion Cell
+软包锂离子电池,Pouch Li-Ion Cell
+液态锂离子电池,Liquid Rechargeable Li-Ion Battery
+非水有机溶剂锂离子电池,Nonaqueous Rechargeable Li-Ion Battery
+水系锂离子电池,Aqueous Rechargeable Li-Ion Battery
+混合固液电解质锂离子电池,Mixed Solid Liquid Electrolyte Rechargeable Li-Ion Battery
+凝胶聚合物锂离子电池,Gelpolymer Rechargeable Li-Ion Battery
+半固态锂离子电池,Half-Solid State Li-Ion Battery
+全固态锂离子电池,All Solid State Rechargeable Li-Ion Battery
+活性材料,Active Material (AM)
+正极活性材料,Cathode Active Material (CAM)
+负极活性材料,Anode Active Material (AAM)
+铝/铜集流体,Al/Cu Current Collector
+阳极,Anode
+负极,Anode
+阴极,Cathode
+正极,Cathode
+电极片,Electrode
+负极片,Anode Electrode
+正极片,Cathode Electrode
+电解质,Electrolyte
+铝塑膜,Laminated Aluminum Plastic Film
+隔膜,Separator
+芯包(卷芯),Jelly Roll
+极组,Jelly Roll Pack
+极耳,Tab
+电池外壳,Cell Can(Case)
+电芯→模组→电池包,Cell→Module→Pack
+电池管理系统,BMS
+电池管理单元,BMU
+单体监控单元,CMU
+原材料,Raw Materials
+上料,Feeding
+搅拌,Mixing
+分散,Dispersing
+除铁,Iron Removing
+合浆,Slurry Preparation
+浆料输送,Slurry Transferring
+正极陶瓷制浆,Ceramic Mixing&Dispersing
+涂布,Coating
+转移涂布,Transfer Coating
+挤压涂布,Extrusion Coating
+辊式涂布,Roll Coating
+NMP溶剂回收系统,NMP Solvent Recovery System
+辊压,Roll Pressing(Calendaring)
+极耳成型,Tab Forming
+分条,Slitting
+分切,Slitting
+制片,Cutting
+冲片,Punching
+卷绕,Winding
+叠片,Stacking
+热压,Hot Pressing
+平压,Flat Pressing
+真空烘烤,Vacuum Baking
+激光焊接,Laser Welding
+电阻焊,Resistance Welding
+超声波焊接,Ultrasonic Welding
+脉冲焊,Pulse Welding
+极柱焊,Stud Welding
+X-Ray 检测,X-Ray Detection
+盖帽焊接,Cap Welding
+壳盖焊接,Top&Case Welding
+圆柱电池入壳,Inserting Can
+方型电池入壳,Casing
+滚槽,Beading
+封口,Sealing
+冲坑,Pouch Forming
+一封,First Sealing
+二封,Second Sealing
+顶封,Tab Sealing
+侧封,Side Sealing
+底封,Side Sealing
+终封,Vacuum Resealing
+注液,Electrolyte Injection(filling)
+脱气,Degassing
+排气,Degassing
+氦检,Helium Test
+气密性测试,Leakage Test
+活化,Activation
+老化,Aging
+分容,Capacity Grading
+常温静置,Room Temperature Resting
+高温静置,High Temperature Resting
+分选,Sorting
+电测,OCV
+直流内阻,DCIR
+电化学反应,Electrochemical Reaction
+结晶极化,Crystallization Polarization
+电极极化,Electrode Polarization
+活化极化,Activation Polarization
+阳极极化,Anodic Polarization
+阴极极化,Cathodic Polarization
+浓差极化,Concentration Polarization
+欧姆极化,Ohmic Polarization
+反应极化,Reaction Polarization
+反极(电池),Cell Reversal
+副反应,Side Reaction
+锂化,Lithiation
+去锂化,Delithiation
+钠化,Sodiation
+去钠化,Desodiation
+嵌入,Intercalation
+脱出,De-Intercalation
+锂枝晶,Lithium Dendrites
+内短路,Internal Short Circuit
+热失控,Thermal Runaway
+热扩散,Thermal Propagation
+电动势,Electromotive Force (EMF)
+标称电压,Nominal Voltage
+额定电压,Nominal Voltage
+充电电压,Charge Voltage
+工作电压,Working(Operating) Voltage
+过电压,Over Voltage
+放电电压,Discharge Voltage
+充电终止电压,End-Of-Charge Voltage
+放电终止电压,End-Of-Discharge Voltage
+开路电压,OCV
+壳体电压,Shell Voltage
+截止电压,Cutoff Voltage
+电压窗口,Voltage Window
+交流阻抗,ACI
+恒流,CC
+恒压,CV
+充电,Charge
+完全充电,Full Charge
+涓流充电,Trickle Charge
+浮充电,Floating Charge
+过充电,Overcharge
+过放电,Over-Discharge
+放电,Discharge
+自放电,Self Discharge
+自放电速率,Self-Discharge Rate
+放电电流,Discharge Current
+放电容量,Discharge Capacity
+放电深度,DOD
+放电倍率,Discharge Rate
+充电倍率,Charge Rate
+短路电流,Short-Circuit Current
+参考试验电流,Reference Test Current
+充电曲线,Charge Curve
+放电曲线,Discharge Curve
+边电压,Pouch Voltage
+荷电保持能力,Charge Retention
+荷电状态,SoC
+电池健康状态,SoH
+额定容量,Rated Capacity
+剩余容量,Residual Capacity
+恢复容量,Recovery Capacity
+克容量,Capacity Per Gram
+质量(比)能量,Gravimetric Energy
+体积(比)能量,Volumic Energy（Related To Battery）
+能量效率,Energy Efficiency
+电池活性物质利用率,Utilization Rate Of Active Material
+质量(比)功率,Gravimetric Power
+体积(比)功率,Volumetric Power
+充电效率,Charge Efficiency
+倍率,C-Rate
+倍率性能,Rate Capability
+长循环,Long-Term Cycling
+功率密度,Power Density
+循环寿命,Cycle Life(Lifespan)
+保存期限,Shelf Life
+锂离子电池生产设备,Li-Ion Battery Production Equipment
+上料系统,Feeding System
+高速分散设备,High Speed Dispersion Equipment
+真空搅拌机,Vacuum Blender
+极片涂布机,Coating Machine
+极片辊压机,Electrode Rollerpress
+极片分切机,Electrode Slitting Machine
+隔膜分切机,Separator Slitting Machine
+极片冲切机,Electrode Punching Machine
+极片滚切机,Electrode Slitting Mill
+极片五金模切机,Electrode Hardware Die Cutting Machine
+极片激光模切机,Electrode Laser Die Cutting Machine
+极耳连续焊接机,Continuous Welding Machine For Tab Connection
+极耳超声焊接机,Ultrasonic Welding Machine For Tab Connection
+滚压分切一体机,Rolling Cutting Machine
+极片五金模切极耳成型机,Die Cutting Machine For Tab Forming
+全自动卷绕机,Automatic Winding Machine
+半自动卷绕机,Semi-Automatic Winding Machine
+激光卷绕一体机,Laser Cutting Winding Machine
+自动叠片机,Automatic Stacking Machine
+卷绕式自动叠片机,Automatic Winding Stacking Machine
+Z字型自动叠片机,Z-Type Automatic Stacking Machine
+制袋式自动叠片机,Automatic Pouched Stacking Machine
+切叠一体机,Cutting And Stacking Machine
+方形制片卷绕一体机,Prismatic Tab Forming And Winding Integrated Machine
+圆柱制片卷绕一体机,Cylindrical Tab Forming And Winding Integrated Machine
+方形全自动卷绕机,Prismatic Automatic Winding Machine
+圆柱全自动卷绕机,Cylindrical Automatic Winding Machine
+极耳预焊裁切机,Tab Pre-Welding And Trimming Machine
+极柱焊接机,Terminal Post Welding Machine
+盖板与转接片焊接机,Welding Machine For Cap Plate And Connector
+极组包胶机,Jelly Roll Pack Taping Machine
+极组包膜机(Mylar膜）,Jelly Roll Pack Coating Machine
+自动入壳机,Jelly Roll Pack Automatic Inserting Can Machine
+激光盖板自动焊接机,Automatic Laser Welding Machine For Cap
+电池泄漏检测机,Leakage Detector
+X-Ray检测机,X-Ray Detector
+圆柱电池自动入壳机,Jellyroll Automatic Inserting Machine For Cylindrical Cell
+圆柱电池底壳焊接机,Bottom Welding Machine For Cylindrical Cell
+圆柱电池自动滚槽机,Automatic Channeling Machine Forcylindrical Cell
+圆柱电池盖帽焊接机,Cap Welding Machine For Cylindrical Cell
+圆柱电池自动封口机,Automatic Sealing Machine For Cylindrical Cell
+全自动注液机,Automatic Electrolyte Injecting Machine
+电池清洗生产线,Battery Cleaning Production Line
+圆柱电池套膜机,Plastic Film Machine For Cylindrical Battery
+铝塑膜成型机,Pouch Forming Machine
+软包装全自动封装线,Automatic Packaging Line For Pouch Cell
+软包装电池除气封装机,Degas Packaging Machine For Pouch Cell
+软包装电池切折烫一体机,Cutting-Folding-Hot Integrated Machine For Pouch Cell
+平压机,Jellyroll Pressing Machine
+OCV测试机,OCV Testing Machine
+打标机,Laser Marking Machine
+化成机,Formation Machine
+分容机,Capacity Grading Machine
+真空负压化成机,Formation Machine With Vacuum Negative Pressure
+真空干燥炉,Vacuum Drying Oven
+隧道式烘干炉,Tunnel Oven
+接触式烘干炉,Contacting Oven
+锂离子电池制造制氮系统,Nitrogen Production System For Li-Ion Battery Manufacturing
+锂离子电池真空干燥隧道炉,Vacuum Drying Tunnel Oven For Li-Ion Battery Manufacturing
+锂离子电池制造真空系统,Vacuum System For Li-Ion Battery Manufacturing
+锂离子电池制造除湿系统,Dehumidification System For Li-Ion Battery Manufacturing
+锂离子电池制造压缩空气系统,Compressed Air System For Li-Ion Battery Manufacturing
+开(放)卷,Uncoil Roll
+收卷,Rewinding
+纠偏,Rectifying Deviation
+行进间纠偏,Rectifying Deviation During Process
+移动纠偏,Motion Rectifying Deviation
+片幅张力,Sheet Tension
+单片对齐精度,Alignment Precision Of Single Electrode
+极片对齐精度,Over Hang Precision
+隔膜对齐精度,Alignment Precision Between Separator And Electrodes
+芯包对齐度,Jellyroll Alignment Metric
+料卷对齐度,Rolls Alignment Metric
+极耳对齐度,Tab Alignment Metric
+重叠余量,Over Hang
+粘度,Viscosity
+毛刺,Burr
+颗粒度,Particle Size
+固含量,Solid Content
+面密度,Surface Density
+压实密度,Compacted Density
+涂布干厚度公差,Dry Coating Thickness Tolerance
+裂纹,Crack
+暗痕,Dark Trace
+降级,Degrade
+凹痕,Dent
+变形,Distortion
+压纹,Empaistic
+腐蚀,Erode
+防爆线,Explosion-Proof Line
+断裂,Fracture
+激光刻线,Laser Reticle
+翘边,Margin Turnly
+划痕,Nick
+硬块,Nugget
+批锋,Sharp-Set
+污物,Smudginess
+喷码,Spraying The Code
+极耳歪斜,Tabs Deflection
+极耳错位,Tabs Excursion
+良品率,Yield Rate
+产线合格率,Line Yield
+测试合格率,Test Pass Yield
+配对合格率,Pair Pass Yield
+电芯直通率,First Pass Yield Of Cell
+电芯成品率,Yield Of Cell
+材料利用率,Material Utilization
+工序材料利用率,Process Material Utilization
+整体材料利用率,Overall Material Utilization
+群裕度,filling ratio
+魏牌,WEY
+问界,ATIO
+理想汽车,Li Auto

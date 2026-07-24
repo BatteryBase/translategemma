@@ -10,6 +10,7 @@ from .detector import detect_language, get_target_language
 from .model import load_model, Backend, get_backend as get_local_backend
 from .backends import VLLMBackend, OllamaBackend
 from .chunker import TextChunker, Chunk
+from .glossary import GlossarySession, get_glossary, is_masked_text
 
 
 # Language code mapping to TranslateGemma's supported codes
@@ -194,7 +195,29 @@ class Translator:
         """Map internal language code to TranslateGemma's format."""
         return LANG_CODE_MAP.get(code, code)
 
-    def _format_gguf_prompt(self, text: str, source_lang: str, target_lang: str) -> str:
+    def _prepare_text_with_glossary(self, text: str, use_glossary: bool) -> str:
+        """Return text for the model; mask once when requested and not already masked."""
+        if not use_glossary or is_masked_text(text):
+            return text
+        prepared, self._glossary_session = get_glossary().mask_for_translation(text)
+        return prepared
+
+    def _mask_glossary_if_needed(self, text: str, use_glossary: bool) -> str:
+        """Mask all glossary hits before translation; preserve session for finalize."""
+        if use_glossary and not is_masked_text(text):
+            masked, self._glossary_session = get_glossary().mask_for_translation(text)
+            return masked
+        return text
+
+    def _finalize_glossary(self, text: str) -> str:
+        session = getattr(self, "_glossary_session", None)
+        if not session or not session.placeholders:
+            return text
+        return get_glossary().finalize_output(text, session)
+
+    def _format_gguf_prompt(
+        self, text: str, source_lang: str, target_lang: str, use_glossary: bool = False
+    ) -> str:
         """Format prompt for GGUF models (manual chat template)."""
         # Language name mapping (subset of TranslateGemma's supported languages)
         lang_names = {
@@ -219,6 +242,8 @@ class Translator:
         source_name = lang_names.get(source_code, source_code)
         target_name = lang_names.get(target_code, target_code)
         
+        body = self._prepare_text_with_glossary(text, use_glossary)
+        
         # Build prompt matching TranslateGemma's chat template format
         prompt = (
             f"<start_of_turn>user\n"
@@ -227,13 +252,13 @@ class Translator:
             f"while adhering to {target_name} grammar, vocabulary, and cultural sensitivities.\n"
             f"Produce only the {target_name} translation, without any additional explanations or commentary. "
             f"Please translate the following {source_name} text into {target_name}:\n\n\n"
-            f"{text.strip()}<end_of_turn>\n"
+            f"{body.strip()}<end_of_turn>\n"
             f"<start_of_turn>model\n"
         )
         return prompt
 
     def _format_messages(
-        self, text: str, source_lang: str, target_lang: str
+        self, text: str, source_lang: str, target_lang: str, use_glossary: bool = False
     ) -> list[dict]:
         """
         Format input for TranslateGemma's chat template.
@@ -248,6 +273,7 @@ class Translator:
         """
         source_code = self._map_lang_code(source_lang)
         target_code = self._map_lang_code(target_lang)
+        body = self._prepare_text_with_glossary(text, use_glossary)
         
         return [
             {
@@ -257,14 +283,14 @@ class Translator:
                         "type": "text",
                         "source_lang_code": source_code,
                         "target_lang_code": target_code,
-                        "text": text,
+                        "text": body,
                     }
                 ],
             }
         ]
 
     def _format_messages_for_server(
-        self, text: str, source_lang: str, target_lang: str
+        self, text: str, source_lang: str, target_lang: str, use_glossary: bool = False
     ) -> list[dict]:
         """
         Format input for server backends (vLLM/Ollama).
@@ -274,9 +300,9 @@ class Translator:
         """
         source_code = self._map_lang_code(source_lang)
         target_code = self._map_lang_code(target_lang)
+        body = self._prepare_text_with_glossary(text, use_glossary)
         
-        # Construct a translation prompt for server backends
-        prompt = f"Translate the following text from {source_code} to {target_code}:\n\n{text}"
+        prompt = f"Translate the following text from {source_code} to {target_code}:\n\n{body}"
         
         return [
             {"role": "user", "content": prompt}
@@ -287,6 +313,7 @@ class Translator:
         text: str,
         force_target: str | None = None,
         mode: OutputMode | None = None,
+        use_glossary: bool = False,
     ) -> tuple[str, str, str]:
         """
         Translate text with automatic language detection.
@@ -308,28 +335,27 @@ class Translator:
         config = get_config()
         output_mode = mode or self._output_mode
         
-        # Detect source language
+        # Detect source language from original text (before masking).
         source_lang = detect_language(text, config.languages)
         
         # Determine target language
         target_lang = force_target or self._force_target or get_target_language(source_lang, config.languages)
+
+        work_text = self._mask_glossary_if_needed(text, use_glossary)
         
-        # Generate based on backend
+        # Generate based on backend (work_text is already masked when glossary is on).
         if self._backend == "vllm":
-            response = self._generate_vllm(text, source_lang, target_lang, config.max_tokens)
+            response = self._generate_vllm(work_text, source_lang, target_lang, config.max_tokens, use_glossary=False)
         elif self._backend == "ollama":
-            response = self._generate_ollama(text, source_lang, target_lang, config.max_tokens)
+            response = self._generate_ollama(work_text, source_lang, target_lang, config.max_tokens, use_glossary=False)
         else:
             # Local backends (mlx, pytorch, gguf)
-            # Format messages
-            messages = self._format_messages(text, source_lang, target_lang)
+            messages = self._format_messages(work_text, source_lang, target_lang, use_glossary=False)
             
-            # For GGUF, we need to format the prompt manually
             if self._backend == "gguf":
-                prompt = self._format_gguf_prompt(text, source_lang, target_lang)
+                prompt = self._format_gguf_prompt(work_text, source_lang, target_lang, use_glossary=False)
                 response = self._generate_gguf(prompt, config.max_tokens)
             else:
-                # Apply chat template for MLX/PyTorch
                 prompt = self._tokenizer.apply_chat_template(
                     messages,
                     tokenize=False,
@@ -347,6 +373,8 @@ class Translator:
         else:
             # Explain mode - just clean special tokens
             response = self._clean_special_tokens(response)
+
+        response = self._finalize_glossary(response)
         
         return response, source_lang, target_lang
 
@@ -360,6 +388,7 @@ class Translator:
         split_by: Literal["sentence", "paragraph", "char"] = "sentence",
         stream: bool = False,
         progress_callback: Callable[[int, int, str], None] | None = None,
+        use_glossary: bool = False,
     ) -> str | Generator[str, None, None]:
         """
         Translate long text using chunking with sliding window.
@@ -383,9 +412,14 @@ class Translator:
         config = get_config()
         output_mode = mode or self._output_mode
         
-        # Detect source and target languages
+        # Detect source and target languages (use original text for language detection)
         source_lang = detect_language(text, config.languages)
         target_lang = force_target or self._force_target or get_target_language(source_lang, config.languages)
+
+        work_text = text
+        self._glossary_session = None
+        if use_glossary:
+            work_text = self._mask_glossary_if_needed(text, True)
         
         # Create chunker
         chunker = TextChunker(
@@ -394,29 +428,29 @@ class Translator:
             split_by=split_by,
         )
         
-        # Split into chunks
-        chunks = chunker.chunk(text)
+        # Split into chunks (masked text preserves placeholders)
+        chunks = chunker.chunk(work_text)
         
         if not chunks:
             return "" if not stream else iter([])
         
-        # If only one chunk, use regular translate
+        # If only one chunk, use regular translate (already masked above)
         if len(chunks) == 1:
             if stream:
-                return self.translate_stream(text, force_target)
-            else:
-                result, _, _ = self.translate(text, force_target, mode)
-                return result
+                return self.translate_stream(work_text, force_target, use_glossary=False)
+            result, _, _ = self.translate(work_text, force_target, mode, use_glossary=False)
+            return result
         
-        # Translate each chunk
+        # Translate each chunk (placeholders already applied to work_text)
         if stream:
             return self._translate_long_stream(
-                chunks, source_lang, target_lang, output_mode, progress_callback
+                chunks, source_lang, target_lang, output_mode, progress_callback, use_glossary=False
             )
         else:
-            return self._translate_long_batch(
-                chunks, source_lang, target_lang, output_mode, progress_callback
+            merged = self._translate_long_batch(
+                chunks, source_lang, target_lang, output_mode, progress_callback, use_glossary=False
             )
+            return self._finalize_glossary(merged)
     
     def _translate_long_batch(
         self,
@@ -425,6 +459,7 @@ class Translator:
         target_lang: str,
         output_mode: OutputMode,
         progress_callback: Callable[[int, int, str], None] | None = None,
+        use_glossary: bool = False,
     ) -> str:
         """Translate chunks in batch mode."""
         config = get_config()
@@ -441,12 +476,17 @@ class Translator:
             
             # Generate based on backend
             if self._backend == "vllm":
-                response = self._generate_vllm(chunk.text, source_lang, target_lang, adaptive_max_tokens)
+                response = self._generate_vllm(
+                    chunk.text, source_lang, target_lang, adaptive_max_tokens, use_glossary=False
+                )
             elif self._backend == "ollama":
-                response = self._generate_ollama(chunk.text, source_lang, target_lang, adaptive_max_tokens)
+                response = self._generate_ollama(
+                    chunk.text, source_lang, target_lang, adaptive_max_tokens, use_glossary=False
+                )
             else:
-                # Local backends
-                messages = self._format_messages(chunk.text, source_lang, target_lang)
+                messages = self._format_messages(
+                    chunk.text, source_lang, target_lang, use_glossary=False
+                )
                 prompt = self._tokenizer.apply_chat_template(
                     messages,
                     tokenize=False,
@@ -463,11 +503,11 @@ class Translator:
                 response = self._clean_response(response)
             else:
                 response = self._clean_special_tokens(response)
-            
+
             translations.append(response)
         
-        # Merge translations
-        chunker = TextChunker()  # Create instance for merge method
+        # Merge translations; caller finalizes placeholders once on the full output.
+        chunker = TextChunker()
         return chunker.merge(chunks, translations)
     
     def _translate_long_stream(
@@ -477,6 +517,7 @@ class Translator:
         target_lang: str,
         output_mode: OutputMode,
         progress_callback: Callable[[int, int, str], None] | None = None,
+        use_glossary: bool = False,
     ) -> Generator[str, None, None]:
         """Translate chunks in streaming mode."""
         config = get_config()
@@ -493,16 +534,21 @@ class Translator:
             chunk_translation = ""
             
             if self._backend == "vllm":
-                for token, _, _ in self._stream_vllm(chunk.text, source_lang, target_lang, adaptive_max_tokens):
+                for token, _, _ in self._stream_vllm(
+                    chunk.text, source_lang, target_lang, adaptive_max_tokens, use_glossary=False
+                ):
                     chunk_translation += token
                     yield token
             elif self._backend == "ollama":
-                for token, _, _ in self._stream_ollama(chunk.text, source_lang, target_lang, adaptive_max_tokens):
+                for token, _, _ in self._stream_ollama(
+                    chunk.text, source_lang, target_lang, adaptive_max_tokens, use_glossary=False
+                ):
                     chunk_translation += token
                     yield token
             else:
-                # Local backends
-                messages = self._format_messages(chunk.text, source_lang, target_lang)
+                messages = self._format_messages(
+                    chunk.text, source_lang, target_lang, use_glossary=False
+                )
                 prompt = self._tokenizer.apply_chat_template(
                     messages,
                     tokenize=False,
@@ -523,7 +569,7 @@ class Translator:
                 chunk_translation = self._clean_response(chunk_translation)
             else:
                 chunk_translation = self._clean_special_tokens(chunk_translation)
-            
+
             translations.append(chunk_translation)
 
 
@@ -621,17 +667,17 @@ class Translator:
         return response
 
     def _generate_vllm(
-        self, text: str, source_lang: str, target_lang: str, max_tokens: int
+        self, text: str, source_lang: str, target_lang: str, max_tokens: int, use_glossary: bool = False
     ) -> str:
         """Generate response using vLLM server backend."""
-        messages = self._format_messages_for_server(text, source_lang, target_lang)
+        messages = self._format_messages_for_server(text, source_lang, target_lang, use_glossary)
         return self._vllm_backend.generate(messages, max_tokens=max_tokens)
 
     def _generate_ollama(
-        self, text: str, source_lang: str, target_lang: str, max_tokens: int
+        self, text: str, source_lang: str, target_lang: str, max_tokens: int, use_glossary: bool = False
     ) -> str:
         """Generate response using Ollama server backend."""
-        messages = self._format_messages_for_server(text, source_lang, target_lang)
+        messages = self._format_messages_for_server(text, source_lang, target_lang, use_glossary)
         return self._ollama_backend.generate(messages, max_tokens=max_tokens)
 
     def _clean_special_tokens(self, text: str) -> str:
@@ -774,6 +820,7 @@ class Translator:
         self,
         text: str,
         force_target: str | None = None,
+        use_glossary: bool = False,
     ) -> Generator[tuple[str, str, str], None, None]:
         """
         Translate text with streaming output (explain mode only).
@@ -795,21 +842,20 @@ class Translator:
             self.ensure_model_loaded()
         config = get_config()
         
-        # Detect source language
+        # Detect source language from original text.
         source_lang = detect_language(text, config.languages)
         
         # Determine target language
         target_lang = force_target or self._force_target or get_target_language(source_lang, config.languages)
+
+        work_text = self._mask_glossary_if_needed(text, use_glossary)
         
-        # Stream based on backend
         if self._backend == "vllm":
-            yield from self._stream_vllm(text, source_lang, target_lang, config.max_tokens)
+            yield from self._stream_vllm(work_text, source_lang, target_lang, config.max_tokens, use_glossary=False)
         elif self._backend == "ollama":
-            yield from self._stream_ollama(text, source_lang, target_lang, config.max_tokens)
+            yield from self._stream_ollama(work_text, source_lang, target_lang, config.max_tokens, use_glossary=False)
         else:
-            # Local backends (mlx, pytorch)
-            # Format messages
-            messages = self._format_messages(text, source_lang, target_lang)
+            messages = self._format_messages(work_text, source_lang, target_lang, use_glossary=False)
             
             # Apply chat template
             prompt = self._tokenizer.apply_chat_template(
@@ -895,10 +941,10 @@ class Translator:
         thread.join()
 
     def _stream_vllm(
-        self, text: str, source_lang: str, target_lang: str, max_tokens: int
+        self, text: str, source_lang: str, target_lang: str, max_tokens: int, use_glossary: bool = False
     ) -> Generator[tuple[str, str, str], None, None]:
         """Stream generation using vLLM server backend."""
-        messages = self._format_messages_for_server(text, source_lang, target_lang)
+        messages = self._format_messages_for_server(text, source_lang, target_lang, use_glossary)
         
         for token in self._vllm_backend.generate_stream(messages, max_tokens=max_tokens):
             if "<end_of_turn>" in token or "<eos>" in token:
@@ -906,10 +952,10 @@ class Translator:
             yield token, source_lang, target_lang
 
     def _stream_ollama(
-        self, text: str, source_lang: str, target_lang: str, max_tokens: int
+        self, text: str, source_lang: str, target_lang: str, max_tokens: int, use_glossary: bool = False
     ) -> Generator[tuple[str, str, str], None, None]:
         """Stream generation using Ollama server backend."""
-        messages = self._format_messages_for_server(text, source_lang, target_lang)
+        messages = self._format_messages_for_server(text, source_lang, target_lang, use_glossary)
         
         for token in self._ollama_backend.generate_stream(messages, max_tokens=max_tokens):
             if "<end_of_turn>" in token or "<eos>" in token:

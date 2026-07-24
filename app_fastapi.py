@@ -42,6 +42,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from translategemma_cli.glossary import get_glossary, should_apply_glossary, split_text_preserving_placeholders
 
 # ==================== Configuration ====================
 DEFAULT_MODEL = os.getenv("MODEL_NAME", "27b")
@@ -52,6 +53,8 @@ MODEL_PRELOAD = os.getenv("MODEL_PRELOAD", "false").lower() in ("1", "true", "ye
 MAX_CHUNK_LENGTH = int(os.getenv("MAX_CHUNK_LENGTH", "100"))  # 100 is safe, 150+ may cause truncation
 DEFAULT_OVERLAP = int(os.getenv("DEFAULT_OVERLAP", "0"))  # 0 = no sliding window, >0 = overlap chars
 REPETITION_PENALTY = float(os.getenv("REPETITION_PENALTY", "1.0"))  # 1.0 = no penalty, 1.1+ = reduce repetition
+GLOSSARY_PATH = os.getenv("GLOSSARY_PATH", "")
+DEFAULT_USE_GLOSSARY = os.getenv("DEFAULT_USE_GLOSSARY", "true").lower() in ("1", "true", "yes")
 
 # Supported languages (55 from TranslateGemma)
 LANGUAGES = {
@@ -239,6 +242,12 @@ def split_sentences(text: str) -> List[str]:
     return sentences
 
 
+def _split_long_segment(segment: str, max_length: int) -> List[str]:
+    """Split a long segment without cutting glossary placeholders."""
+    glossary = get_glossary()
+    return split_text_preserving_placeholders(segment, max_length, glossary)
+
+
 def split_text(text: str, max_length: int = MAX_CHUNK_LENGTH, overlap: int = 0) -> List[dict]:
     """
     Smart text splitting with optional sliding window overlap.
@@ -270,9 +279,7 @@ def split_text(text: str, max_length: int = MAX_CHUNK_LENGTH, overlap: int = 0) 
             sentences = split_sentences(para)
             
             if not sentences:
-                # No sentence boundaries, split by length
-                for i in range(0, len(para), max_length):
-                    chunk_text = para[i:i+max_length].strip()
+                for chunk_text in _split_long_segment(para, max_length):
                     chunks.append({"text": chunk_text, "overlap_chars": 0})
             else:
                 # Group sentences into chunks with optional overlap
@@ -298,9 +305,8 @@ def split_text(text: str, max_length: int = MAX_CHUNK_LENGTH, overlap: int = 0) 
                                 prev_overlap_text = _get_overlap_text(current, overlap)
                         
                         if len(sent) > max_length:
-                            # Handle very long sentence
-                            for i in range(0, len(sent), max_length):
-                                chunks.append({"text": sent[i:i+max_length].strip(), "overlap_chars": 0})
+                            for chunk_text in _split_long_segment(sent, max_length):
+                                chunks.append({"text": chunk_text, "overlap_chars": 0})
                             current = ""
                             prev_overlap_text = ""
                         else:
@@ -347,6 +353,10 @@ def _get_overlap_text(text: str, overlap: int) -> str:
 
 
 # ==================== Translation Functions ====================
+def _resolve_use_glossary(use_glossary: bool | None, text: str = "") -> bool:
+    return should_apply_glossary(text, use_glossary, default=DEFAULT_USE_GLOSSARY)
+
+
 def translate(
     text: str,
     target_lang: str,
@@ -357,6 +367,7 @@ def translate(
     overlap: int = DEFAULT_OVERLAP,
     repetition_penalty: float = REPETITION_PENALTY,
     auto_split: bool = True,
+    use_glossary: bool | None = None,
 ) -> dict:
     """Translate text with chunking and optional sliding window support."""
     start_time = time.time()
@@ -372,16 +383,22 @@ def translate(
         actual_model = model_size.lower()
     
     translator = gpu.load(actual_model, actual_quant)
+    glossary_enabled = _resolve_use_glossary(use_glossary, text)
+
+    work_text = text
+    glossary_session = None
+    if glossary_enabled:
+        work_text, glossary_session = get_glossary().mask_for_translation(text)
     
     # Set target language
     if target_lang:
         translator.set_force_target(target_lang)
     
-    # Split text with optional overlap
-    if auto_split:
-        chunk_data = split_text(text, chunk_size, overlap)
+    # Split on masked text, but avoid chunking very short inputs.
+    if auto_split and len(text) > chunk_size:
+        chunk_data = split_text(work_text, chunk_size, overlap)
     else:
-        chunk_data = [{"text": text, "overlap_chars": 0}]
+        chunk_data = [{"text": work_text, "overlap_chars": 0}]
     
     results = []
     
@@ -389,7 +406,9 @@ def translate(
         chunk_text = chunk_info["text"]
         overlap_chars = chunk_info["overlap_chars"]
         
-        result, src, tgt = translator.translate(chunk_text, force_target=target_lang)
+        result, src, tgt = translator.translate(
+            chunk_text, force_target=target_lang, use_glossary=False
+        )
         
         # If overlap was used, we need to handle potential duplicate content
         # The overlap is in source text for context, but translation may have duplicates
@@ -409,6 +428,8 @@ def translate(
     
     # Merge results
     final_result = _merge_translations(results, text, overlap > 0)
+    if glossary_session:
+        final_result = get_glossary().finalize_output(final_result, glossary_session)
     
     # Store model info before potential unload
     model_info = f"{actual_model}-Q{actual_quant}" if actual_model else f"{DEFAULT_MODEL}-Q{DEFAULT_QUANTIZATION}"
@@ -423,6 +444,7 @@ def translate(
         "output_length": len(final_result),
         "model": model_info,
         "overlap_used": overlap,
+        "use_glossary": glossary_enabled,
         "chars_per_sec": round(len(text) / (elapsed_ms / 1000), 1) if elapsed_ms > 0 else 0,
     }
 
@@ -462,10 +484,24 @@ async def translate_stream(
     quantization: int = None,
     chunk_size: int = MAX_CHUNK_LENGTH,
     overlap: int = DEFAULT_OVERLAP,
+    use_glossary: bool | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream translation results chunk by chunk."""
+    from translategemma_cli.glossary import get_glossary
+
     start_time = time.time()
-    chunk_data = split_text(text, chunk_size, overlap)
+    glossary_enabled = _resolve_use_glossary(use_glossary, text)
+
+    work_text = text
+    glossary_session = None
+    if glossary_enabled:
+        work_text, glossary_session = get_glossary().mask_for_translation(text)
+
+    chunk_data = (
+        split_text(work_text, chunk_size, overlap)
+        if len(text) > chunk_size
+        else [{"text": work_text, "overlap_chars": 0}]
+    )
     total_chunks = len(chunk_data)
     
     yield f"data: {json.dumps({'event': 'start', 'total_chunks': total_chunks, 'input_length': len(text), 'overlap': overlap})}\n\n"
@@ -494,7 +530,10 @@ async def translate_stream(
         
         loop = asyncio.get_event_loop()
         result, src, tgt = await loop.run_in_executor(
-            None, lambda c=chunk_text: translator.translate(c, force_target=target_lang)
+            None,
+            lambda c=chunk_text: translator.translate(
+                c, force_target=target_lang, use_glossary=False
+            ),
         )
         results.append({"text": result, "overlap_chars": chunk_info["overlap_chars"]})
         
@@ -511,8 +550,10 @@ async def translate_stream(
     
     # Merge results
     final_result = _merge_translations(results, text, overlap > 0)
+    if glossary_session:
+        final_result = get_glossary().finalize_output(final_result, glossary_session)
     
-    yield f"data: {json.dumps({'event': 'done', 'result': final_result, 'elapsed_ms': total_elapsed, 'output_length': len(final_result), 'model': model_info, 'overlap_used': overlap})}\n\n"
+    yield f"data: {json.dumps({'event': 'done', 'result': final_result, 'elapsed_ms': total_elapsed, 'output_length': len(final_result), 'model': model_info, 'overlap_used': overlap, 'use_glossary': glossary_enabled})}\n\n"
 
 
 # ==================== FastAPI App ====================
@@ -560,6 +601,9 @@ class TranslateRequest(BaseModel):
     overlap: int = Field(DEFAULT_OVERLAP, description="Overlap size for sliding window (0=disabled)")
     auto_split: bool = Field(True, description="Auto-split long text")
     stream: bool = Field(False, description="Stream results")
+    use_glossary: Optional[bool] = Field(
+        None, description="Inject domain glossary into prompt (default from DEFAULT_USE_GLOSSARY)"
+    )
 
 
 class TranslateResponse(BaseModel):
@@ -573,6 +617,7 @@ class TranslateResponse(BaseModel):
     output_length: Optional[int] = None
     model: Optional[str] = None
     chars_per_sec: Optional[float] = None
+    use_glossary: Optional[bool] = None
     error: Optional[str] = None
 
 
@@ -582,6 +627,7 @@ class BatchRequest(BaseModel):
     source_lang: Optional[str] = None
     model: Optional[str] = None
     quantization: Optional[int] = None
+    use_glossary: Optional[bool] = None
 
 
 class SwitchModelRequest(BaseModel):
@@ -596,6 +642,9 @@ async def health():
 
 @app.get("/api/config")
 async def api_config():
+    from translategemma_cli.glossary import resolve_glossary_path
+
+    glossary = get_glossary(GLOSSARY_PATH or None)
     return {
         "default_model": DEFAULT_MODEL,
         "default_quantization": DEFAULT_QUANTIZATION,
@@ -604,6 +653,9 @@ async def api_config():
         "max_chunk_length": MAX_CHUNK_LENGTH,
         "default_overlap": DEFAULT_OVERLAP,
         "repetition_penalty": REPETITION_PENALTY,
+        "default_use_glossary": DEFAULT_USE_GLOSSARY,
+        "glossary_path": str(resolve_glossary_path(GLOSSARY_PATH or None)),
+        "glossary_entries": glossary.size,
         "supported_languages": len(LANGUAGES),
     }
 
@@ -665,6 +717,7 @@ async def api_translate(req: TranslateRequest):
                     quantization=req.quantization,
                     chunk_size=req.chunk_size,
                     overlap=req.overlap,
+                    use_glossary=req.use_glossary,
                 ),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -679,6 +732,7 @@ async def api_translate(req: TranslateRequest):
             chunk_size=req.chunk_size,
             overlap=req.overlap,
             auto_split=req.auto_split,
+            use_glossary=req.use_glossary,
         )
         return TranslateResponse(status="success", **result)
     except Exception as e:
@@ -697,6 +751,7 @@ async def api_translate_stream(req: TranslateRequest):
             quantization=req.quantization,
             chunk_size=req.chunk_size,
             overlap=req.overlap,
+            use_glossary=req.use_glossary,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -717,6 +772,7 @@ async def api_translate_batch(req: BatchRequest):
                 source_lang=req.source_lang,
                 model_size=req.model,
                 quantization=req.quantization,
+                use_glossary=req.use_glossary,
             )
             results.append({"status": "success", "result": r["result"], "elapsed_ms": r["elapsed_ms"]})
         except Exception as e:
@@ -737,6 +793,7 @@ async def api_translate_file(
     source_lang: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
     stream: bool = Form(False),
+    use_glossary: Optional[bool] = Form(None),
 ):
     """Translate uploaded text file."""
     try:
@@ -745,11 +802,23 @@ async def api_translate_file(
         
         if stream:
             return StreamingResponse(
-                translate_stream(text=text, target_lang=target_lang, source_lang=source_lang, model_size=model),
+                translate_stream(
+                    text=text,
+                    target_lang=target_lang,
+                    source_lang=source_lang,
+                    model_size=model,
+                    use_glossary=use_glossary,
+                ),
                 media_type="text/event-stream",
             )
         
-        result = translate(text=text, target_lang=target_lang, source_lang=source_lang, model_size=model)
+        result = translate(
+            text=text,
+            target_lang=target_lang,
+            source_lang=source_lang,
+            model_size=model,
+            use_glossary=use_glossary,
+        )
         return TranslateResponse(status="success", **result)
     except UnicodeDecodeError:
         return TranslateResponse(status="error", error="File encoding error. Please use UTF-8.")

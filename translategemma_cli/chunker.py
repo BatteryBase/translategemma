@@ -237,6 +237,36 @@ class TextChunker:
     
     def _chunk_by_char(self, text: str) -> list[Chunk]:
         """Split text by character count with sliding window."""
+        from translategemma_cli.glossary import (
+            get_glossary,
+            is_masked_text,
+            split_text_preserving_placeholders,
+        )
+
+        if is_masked_text(text):
+            glossary = get_glossary()
+            parts = split_text_preserving_placeholders(text, self.chunk_size, glossary)
+            chunks = []
+            pos = 0
+            for i, part in enumerate(parts):
+                start = text.find(part, pos)
+                if start < 0:
+                    start = pos
+                end = start + len(part)
+                chunks.append(
+                    Chunk(
+                        text=part,
+                        start=start,
+                        end=end,
+                        overlap_start=0 if i == 0 else self.overlap,
+                        overlap_end=len(part),
+                        is_first=i == 0,
+                        is_last=i == len(parts) - 1,
+                    )
+                )
+                pos = end
+            return chunks
+
         chunks = []
         text_len = len(text)
         pos = 0

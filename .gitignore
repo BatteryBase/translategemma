@@ -138,6 +138,9 @@ temp/
 *.tmp
 /tmp/
 
+# 批处理断点续跑缓存
+scripts/.zj_progress/
+
 # Benchmark results (generated)
 benchmark_results.json
 complete_benchmark_results.json

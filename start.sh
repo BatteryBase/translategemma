@@ -85,18 +85,68 @@ load_env() {
     fi
 }
 
+# Detect docker compose (plugin or standalone)
+detect_compose() {
+    if docker compose version &>/dev/null; then
+        COMPOSE_CMD=(docker compose)
+        return 0
+    fi
+    if command -v docker-compose &>/dev/null; then
+        COMPOSE_CMD=(docker-compose)
+        return 0
+    fi
+    return 1
+}
+
+# Fallback: plain docker run when compose is unavailable
+start_with_docker_run() {
+    local image="neosun/translategemma:latest"
+    local gpu_devices="${NVIDIA_VISIBLE_DEVICES:-0}"
+
+    if [[ "$1" == "--build" ]] || [[ "$1" == "-b" ]]; then
+        echo -e "${CYAN}Building Docker image...${NC}"
+        docker build -t "$image" .
+    fi
+
+    docker rm -f translategemma &>/dev/null || true
+
+    docker run -d \
+        --name translategemma \
+        --gpus "device=${gpu_devices}" \
+        -p "0.0.0.0:${PORT:-8022}:8022" \
+        -e "NVIDIA_VISIBLE_DEVICES=${gpu_devices}" \
+        -e "MODEL_NAME=${MODEL_NAME:-12b}" \
+        -e "QUANTIZATION=${QUANTIZATION:-4}" \
+        -e "BACKEND=${BACKEND:-gguf}" \
+        -e "GPU_IDLE_TIMEOUT=${GPU_IDLE_TIMEOUT:-300}" \
+        -e "MAX_CHUNK_LENGTH=${MAX_CHUNK_LENGTH:-80}" \
+        -e "HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}" \
+        -e "HF_HUB_ENABLE_HF_TRANSFER=1" \
+        -e "HF_HOME=/app/models" \
+        -v "${HOME}/.cache/translate/models:/app/models" \
+        -v "${HOME}/.cache/translate/models:/root/.cache/translate/models" \
+        -v "/tmp/translategemma:/tmp/translategemma" \
+        --restart unless-stopped \
+        "$image"
+}
+
 # Build and start
 start_service() {
     echo -e "\n${CYAN}Starting TranslateGemma service...${NC}"
-    
-    # Build if needed
-    if [[ "$1" == "--build" ]] || [[ "$1" == "-b" ]]; then
-        echo -e "${CYAN}Building Docker image...${NC}"
-        docker compose build
+
+    if detect_compose; then
+        if [[ "$1" == "--build" ]] || [[ "$1" == "-b" ]]; then
+            echo -e "${CYAN}Building Docker image...${NC}"
+            "${COMPOSE_CMD[@]}" build
+        fi
+        "${COMPOSE_CMD[@]}" up -d
+    else
+        echo -e "${YELLOW}Docker Compose not found, using docker run fallback.${NC}"
+        echo -e "${YELLOW}Install compose for easier management:${NC}"
+        echo -e "${YELLOW}  sudo apt install docker-compose${NC}"
+        echo -e "${YELLOW}  # or: mkdir -p ~/.docker/cli-plugins && curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o ~/.docker/cli-plugins/docker-compose && chmod +x ~/.docker/cli-plugins/docker-compose${NC}"
+        start_with_docker_run "$@"
     fi
-    
-    # Start
-    docker compose up -d
     
     echo -e "\n${GREEN}╔════════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}║     TranslateGemma Started Successfully    ║${NC}"
