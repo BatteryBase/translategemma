@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Literal
+import os
 import yaml
 
 # Default paths
@@ -163,6 +164,9 @@ def get_default_config_data() -> dict:
                 "n_gpu_layers": -1,  # -1 = all layers on GPU
                 "n_ctx": 4096,       # context window
                 "n_threads": None,   # None = auto
+                # Multi-GPU split ratios, e.g. "1,1,1,1" for 4 equal cards.
+                # Overridable by env GGUF_TENSOR_SPLIT.
+                "tensor_split": None,
             },
         },
         "translation": {
@@ -294,12 +298,31 @@ class Config:
     @property
     def gguf_n_gpu_layers(self) -> int:
         """Number of layers to offload to GPU for GGUF models."""
+        env = os.getenv("GGUF_N_GPU_LAYERS")
+        if env is not None and env.strip() != "":
+            return int(env)
         return self._data.get("backend", {}).get("gguf", {}).get("n_gpu_layers", -1)
 
     @property
     def gguf_n_ctx(self) -> int:
         """Context window size for GGUF models."""
+        env = os.getenv("GGUF_N_CTX")
+        if env is not None and env.strip() != "":
+            return int(env)
         return self._data.get("backend", {}).get("gguf", {}).get("n_ctx", 4096)
+
+    @property
+    def gguf_tensor_split(self) -> list[float] | None:
+        """Per-GPU tensor split ratios for multi-GPU GGUF (e.g. [1,1,1,1])."""
+        env = os.getenv("GGUF_TENSOR_SPLIT", "").strip()
+        raw = env or self._data.get("backend", {}).get("gguf", {}).get("tensor_split")
+        if not raw:
+            return None
+        if isinstance(raw, (list, tuple)):
+            vals = [float(x) for x in raw]
+        else:
+            vals = [float(x.strip()) for x in str(raw).split(",") if x.strip()]
+        return vals or None
 
     @property
     def languages(self) -> tuple[str, str]:

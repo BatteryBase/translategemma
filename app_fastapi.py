@@ -33,9 +33,13 @@ import threading
 import gc
 import json
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, List, AsyncGenerator
+
+# 单线程池：推理不堵事件循环，同时避免多请求并发抢同一 GPU 模型
+_TRANSLATE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tg-infer")
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
@@ -55,6 +59,8 @@ DEFAULT_OVERLAP = int(os.getenv("DEFAULT_OVERLAP", "0"))  # 0 = no sliding windo
 REPETITION_PENALTY = float(os.getenv("REPETITION_PENALTY", "1.0"))  # 1.0 = no penalty, 1.1+ = reduce repetition
 GLOSSARY_PATH = os.getenv("GLOSSARY_PATH", "")
 DEFAULT_USE_GLOSSARY = os.getenv("DEFAULT_USE_GLOSSARY", "true").lower() in ("1", "true", "yes")
+# 单条翻译墙钟超时；超时后客户端能立刻失败，避免无限等待（卡住的推理线程仍可能占着 executor，需重启服务）
+TRANSLATE_TIMEOUT = float(os.getenv("TRANSLATE_TIMEOUT", "180"))
 
 # Supported languages (55 from TranslateGemma)
 LANGUAGES = {
@@ -722,18 +728,34 @@ async def api_translate(req: TranslateRequest):
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
-        
-        result = translate(
-            text=req.text,
-            target_lang=req.target_lang,
-            source_lang=req.source_lang,
-            model_size=req.model,
-            quantization=req.quantization,
-            chunk_size=req.chunk_size,
-            overlap=req.overlap,
-            auto_split=req.auto_split,
-            use_glossary=req.use_glossary,
-        )
+
+        loop = asyncio.get_running_loop()
+        try:
+            result = await asyncio.wait_for(
+                loop.run_in_executor(
+                    _TRANSLATE_EXECUTOR,
+                    lambda: translate(
+                        text=req.text,
+                        target_lang=req.target_lang,
+                        source_lang=req.source_lang,
+                        model_size=req.model,
+                        quantization=req.quantization,
+                        chunk_size=req.chunk_size,
+                        overlap=req.overlap,
+                        auto_split=req.auto_split,
+                        use_glossary=req.use_glossary,
+                    ),
+                ),
+                timeout=TRANSLATE_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            return TranslateResponse(
+                status="error",
+                error=(
+                    f"translate timeout after {TRANSLATE_TIMEOUT:.0f}s; "
+                    "if this repeats, restart the API (CUDA may be wedged)"
+                ),
+            )
         return TranslateResponse(status="success", **result)
     except Exception as e:
         return TranslateResponse(status="error", error=str(e))
@@ -762,22 +784,27 @@ async def api_translate_stream(req: TranslateRequest):
 async def api_translate_batch(req: BatchRequest):
     """Batch translate multiple texts."""
     start_time = time.time()
-    results = []
-    
-    for text in req.texts:
-        try:
-            r = translate(
-                text=text,
-                target_lang=req.target_lang,
-                source_lang=req.source_lang,
-                model_size=req.model,
-                quantization=req.quantization,
-                use_glossary=req.use_glossary,
-            )
-            results.append({"status": "success", "result": r["result"], "elapsed_ms": r["elapsed_ms"]})
-        except Exception as e:
-            results.append({"status": "error", "error": str(e)})
-    
+
+    def _run_batch() -> list:
+        out = []
+        for text in req.texts:
+            try:
+                r = translate(
+                    text=text,
+                    target_lang=req.target_lang,
+                    source_lang=req.source_lang,
+                    model_size=req.model,
+                    quantization=req.quantization,
+                    use_glossary=req.use_glossary,
+                )
+                out.append({"status": "success", "result": r["result"], "elapsed_ms": r["elapsed_ms"]})
+            except Exception as e:
+                out.append({"status": "error", "error": str(e)})
+        return out
+
+    loop = asyncio.get_running_loop()
+    results = await loop.run_in_executor(_TRANSLATE_EXECUTOR, _run_batch)
+
     return {
         "status": "success",
         "results": results,
@@ -812,12 +839,16 @@ async def api_translate_file(
                 media_type="text/event-stream",
             )
         
-        result = translate(
-            text=text,
-            target_lang=target_lang,
-            source_lang=source_lang,
-            model_size=model,
-            use_glossary=use_glossary,
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            _TRANSLATE_EXECUTOR,
+            lambda: translate(
+                text=text,
+                target_lang=target_lang,
+                source_lang=source_lang,
+                model_size=model,
+                use_glossary=use_glossary,
+            ),
         )
         return TranslateResponse(status="success", **result)
     except UnicodeDecodeError:

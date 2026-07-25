@@ -643,6 +643,8 @@ class Translator:
         gen_kwargs = {
             "max_tokens": max_tokens,
             "echo": False,
+            # TranslateGemma chat template ends model turns with <end_of_turn>
+            "stop": ["<end_of_turn>", "<eos>"],
         }
         
         # Add sampling parameters

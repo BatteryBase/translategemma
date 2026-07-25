@@ -36,12 +36,15 @@ MODEL_PRELOAD=true
 GPU_IDLE_TIMEOUT=3600
 ```
 
-## 下载模型（ModelScope）
+## 下载模型（推荐 GGUF Q8）
+
+全精度 PyTorch 路径已弃用。请用：
 
 ```bash
-python scripts/download_modelscope.py 27b \
-  -o ~/nhwork/translategemma/models/translategemma-27b-it
+python scripts/download_27b_q8.py
 ```
+
+详见 `docs/SERVER_SETUP_27B_Q8.md`。
 
 ## SSH 隧道（外网 80 不通时）
 

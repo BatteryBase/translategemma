@@ -557,15 +557,29 @@ def load_model(model_size: str | None = None, model_format: str | None = None) -
 
 
 def _load_gguf(model_size: str, quantization_bits: int) -> tuple[Any, Any, Backend]:
-    """Load model using llama-cpp-python backend."""
+    """Load model using llama-cpp-python backend (supports multi-GPU via tensor_split)."""
     try:
         from llama_cpp import Llama
+        from llama_cpp.llama_cpp import llama_supports_gpu_offload
     except ImportError as e:
         console.print(f"[red]Error importing llama-cpp-python: {e}[/red]")
         console.print("\n[yellow]To fix, install llama-cpp-python:[/yellow]")
         console.print("  pip install llama-cpp-python")
         console.print("\n[dim]For GPU support:[/dim]")
-        console.print("  CMAKE_ARGS=\"-DGGML_CUDA=on\" pip install llama-cpp-python")
+        console.print(
+            '  CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=70" '
+            "pip install --force-reinstall --no-binary=llama-cpp-python llama-cpp-python"
+        )
+        raise SystemExit(1)
+
+    if not llama_supports_gpu_offload():
+        console.print(
+            "[red]llama-cpp-python was built without CUDA GPU offload.[/red]\n"
+            "[yellow]Rebuild with:[/yellow]\n"
+            '  export CUDA_HOME=/usr/local/cuda-12.4\n'
+            '  export CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=70"\n'
+            "  pip install --force-reinstall --no-cache-dir --no-binary=llama-cpp-python llama-cpp-python"
+        )
         raise SystemExit(1)
     
     config = get_config()
@@ -573,8 +587,43 @@ def _load_gguf(model_size: str, quantization_bits: int) -> tuple[Any, Any, Backe
     
     if not gguf_path.exists():
         console.print(f"[red]GGUF model not found at {gguf_path}[/red]")
-        console.print("[yellow]Run: translate model download --format gguf[/yellow]")
+        console.print(
+            f"[yellow]Download with:[/yellow]\n"
+            f"  python -c \"from translategemma_cli.model import download_and_convert_model; "
+            f"download_and_convert_model('{model_size}', {quantization_bits}, 'gguf')\""
+        )
         raise SystemExit(1)
+
+    n_gpu_layers = config.gguf_n_gpu_layers
+    n_ctx = config.gguf_n_ctx
+    tensor_split = config.gguf_tensor_split
+
+    # Auto equal split across visible CUDA devices when not set
+    if tensor_split is None:
+        try:
+            import torch
+            n = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        except Exception:
+            n = 0
+        if n > 1:
+            tensor_split = [1.0] * n
+
+    load_kwargs: dict = {
+        "model_path": str(gguf_path),
+        "n_gpu_layers": n_gpu_layers,
+        "n_ctx": n_ctx,
+        "verbose": False,
+    }
+    if tensor_split:
+        load_kwargs["tensor_split"] = tensor_split
+        console.print(
+            f"[cyan]GGUF multi-GPU:[/cyan] layers={n_gpu_layers}  "
+            f"tensor_split={tensor_split}  ctx={n_ctx}"
+        )
+    else:
+        console.print(
+            f"[cyan]GGUF single-GPU:[/cyan] layers={n_gpu_layers}  ctx={n_ctx}"
+        )
     
     with Progress(
         SpinnerColumn(),
@@ -583,13 +632,7 @@ def _load_gguf(model_size: str, quantization_bits: int) -> tuple[Any, Any, Backe
     ) as progress:
         task = progress.add_task("Loading GGUF model...", total=None)
         
-        # Load model with llama-cpp
-        model = Llama(
-            model_path=str(gguf_path),
-            n_gpu_layers=config.gguf_n_gpu_layers,
-            n_ctx=config.gguf_n_ctx,
-            verbose=False,
-        )
+        model = Llama(**load_kwargs)
         
         progress.update(task, description="Model ready")
     
