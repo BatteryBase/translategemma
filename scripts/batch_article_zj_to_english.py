@@ -137,6 +137,7 @@ def translate_one(text: str, source_lang: str = "zh", target_lang: str = "en") -
         "text": text,
         "source_lang": source_lang,
         "target_lang": target_lang,
+        "use_glossary": True,
     }
     r = requests.post(url, json=payload, timeout=TRANSLATE_TIMEOUT)
     if r.status_code >= 400:

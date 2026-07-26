@@ -171,25 +171,60 @@ class Glossary:
 
         result = _BRACE_TOKEN_RE.sub(_brace_replacer, result)
 
-        # 4) Force each matched source term to appear as the glossary English target.
+        # 4) Force glossary English targets when the model used a wrong wording.
+        # Guard every replace loop: if substitution makes no progress, stop.
+        # (Old code matched the canonical target itself with IGNORECASE and spun forever
+        # when expected count > actual count, e.g. Charge×2 but only one "Charge" in output.)
         for source, target in sorted(session.sources.items(), key=lambda x: len(x[0]), reverse=True):
             expected = session.source_counts.get(source, 0)
+            if expected <= 0:
+                continue
             actual = result.count(target)
             if actual >= expected:
                 continue
+
             for wrong in self._wrongs.get(source, []):
+                if not wrong or wrong.casefold() == target.casefold():
+                    continue
                 pattern = re.compile(re.escape(wrong), re.IGNORECASE)
-                while actual < expected and pattern.search(result):
-                    result = pattern.sub(target, result, count=1)
-                    actual = result.count(target)
-            if actual < expected:
+                guard = 0
+                while actual < expected and guard < expected + 8:
+                    guard += 1
+                    if not pattern.search(result):
+                        break
+                    new_result = pattern.sub(target, result, count=1)
+                    if new_result == result:
+                        break
+                    result = new_result
+                    new_actual = result.count(target)
+                    if new_actual <= actual:
+                        break
+                    actual = new_actual
+
+            # Normalize multi-word spaced variants only ("Li-ion  Battery" → "Li-ion Battery").
+            # Never run this for single-token targets like "Charge"/"Anode" — that was the hang.
+            parts = target.split()
+            if actual < expected and len(parts) >= 2:
                 spaced = re.compile(
-                    r"\s*".join(re.escape(part) for part in target.split()),
+                    r"\s+".join(re.escape(part) for part in parts),
                     re.IGNORECASE,
                 )
-                while actual < expected and spaced.search(result):
-                    result = spaced.sub(target, result, count=1)
-                    actual = result.count(target)
+                guard = 0
+                while actual < expected and guard < expected + 8:
+                    guard += 1
+                    m = spaced.search(result)
+                    if not m:
+                        break
+                    if m.group(0) == target:
+                        break
+                    new_result = result[: m.start()] + target + result[m.end() :]
+                    if new_result == result:
+                        break
+                    result = new_result
+                    new_actual = result.count(target)
+                    if new_actual <= actual:
+                        break
+                    actual = new_actual
 
         return result
 

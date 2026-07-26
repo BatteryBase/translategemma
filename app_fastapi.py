@@ -196,28 +196,35 @@ class GPUManager:
 
     def status(self):
         gpu_info = {"available": False}
-        try:
-            import torch
-            if torch.cuda.is_available():
-                # 只有在模型加载后才显示显存信息
-                if self.translator is not None:
-                    free, total = torch.cuda.mem_get_info()
-                    used = total - free
-                    gpu_info = {
-                        "available": True,
-                        "device": torch.cuda.get_device_name(0),
-                        "free_mb": int(free / 1024 / 1024),
-                        "total_mb": int(total / 1024 / 1024),
-                        "used_mb": int(used / 1024 / 1024),
-                    }
-                else:
-                    gpu_info = {
-                        "available": True,
-                        "device": torch.cuda.get_device_name(0),
-                    }
-        except:
-            pass
-        
+        # GGUF/llama.cpp 占用 CUDA 时，勿在事件循环线程调用 torch.cuda（会与推理线程打架导致假死）
+        if DEFAULT_BACKEND == "gguf":
+            gpu_info = {
+                "available": True,
+                "backend": "gguf",
+                "device": "CUDA (GGUF multi-GPU)",
+            }
+        else:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    if self.translator is not None:
+                        free, total = torch.cuda.mem_get_info()
+                        used = total - free
+                        gpu_info = {
+                            "available": True,
+                            "device": torch.cuda.get_device_name(0),
+                            "free_mb": int(free / 1024 / 1024),
+                            "total_mb": int(total / 1024 / 1024),
+                            "used_mb": int(used / 1024 / 1024),
+                        }
+                    else:
+                        gpu_info = {
+                            "available": True,
+                            "device": torch.cuda.get_device_name(0),
+                        }
+            except Exception:
+                pass
+
         return {
             "loaded": self.translator is not None,
             "loading": self.loading,
@@ -534,9 +541,9 @@ async def translate_stream(
         
         yield f"data: {json.dumps({'event': 'progress', 'chunk': i + 1, 'total': total_chunks})}\n\n"
         
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         result, src, tgt = await loop.run_in_executor(
-            None,
+            _TRANSLATE_EXECUTOR,
             lambda c=chunk_text: translator.translate(
                 c, force_target=target_lang, use_glossary=False
             ),
@@ -566,10 +573,12 @@ async def translate_stream(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if MODEL_PRELOAD:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
+            # 必须与翻译同一线程池：llama.cpp/CUDA 不能跨线程使用同一模型实例
             await loop.run_in_executor(
-                None, lambda: gpu.load(DEFAULT_MODEL, DEFAULT_QUANTIZATION)
+                _TRANSLATE_EXECUTOR,
+                lambda: gpu.load(DEFAULT_MODEL, DEFAULT_QUANTIZATION),
             )
             print(f"[startup] Model preloaded: {DEFAULT_MODEL}-Q{DEFAULT_QUANTIZATION}")
         except Exception as e:
@@ -698,7 +707,11 @@ async def api_switch_model(req: SwitchModelRequest):
     
     try:
         start = time.time()
-        gpu.load(model_size, quant)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            _TRANSLATE_EXECUTOR,
+            lambda: gpu.load(model_size, quant),
+        )
         elapsed = int((time.time() - start) * 1000)
         return {
             "status": "success",

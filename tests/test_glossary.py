@@ -70,6 +70,24 @@ def test_should_apply_when_text_has_glossary_terms(tmp_path: Path):
     assert should_apply_glossary("理想汽车", False, default=True) is False
 
 
+def test_finalize_underproduced_targets_does_not_hang(tmp_path: Path):
+    """Regression: expected Charge×2 but output has only one Charge must not spin forever."""
+    csv_path = tmp_path / "glossary.csv"
+    csv_path.write_text(
+        "source,target\n充电,Charge\n放电,Discharge\n负极,Anode\n",
+        encoding="utf-8",
+    )
+    g = Glossary(csv_path)
+    # Source has 充电 twice → expected Charge count 2
+    text = "快速充电与慢速充电"
+    masked, session = g.mask_for_translation(text)
+    assert session.source_counts["充电"] == 2
+    # Model only kept one Charge after restore
+    out = g.finalize_output("⟦G0⟧ and slow charge only once", session)
+    assert "Charge" in out
+    assert "⟦G" not in out
+
+
 def test_all_glossary_terms_masked_in_real_file():
     glossary_path = Path(__file__).resolve().parents[1] / "docs" / "glossary.csv"
     g = Glossary(glossary_path)

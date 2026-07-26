@@ -1,5 +1,9 @@
 # V100 多卡部署说明（27B PyTorch）
 
+> **当前推荐**：27B-Q8 GGUF，见 `docs/SERVER_SETUP_27B_Q8.md`。  
+> 假死/超时原因汇总：`docs/TROUBLESHOOTING_HANGS.md`。  
+> 下文保留全精度 PyTorch 路径说明（易 CPU offload，长段不稳定）。
+
 ## 适用环境
 
 - 4× Tesla V100-SXM2-16GB

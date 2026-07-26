@@ -47,5 +47,13 @@ V100 为 compute capability 70。
 | | 27B bf16 全精度 | **27B-Q8 GGUF** |
 |--|----------------|-----------------|
 | 显存 | ~54GB+，易 CPU offload | ~28–35GB，四卡轻松 |
-| 稳定性 | 长段易卡死 | 适合批处理 |
+| 稳定性 | 长段易卡死 | 适合批处理（需注意术语表/驱动，见下） |
 | 质量 | 最高 | 接近，实务够用 |
+
+## 假死 / 超时
+
+若出现短句正常、长段 180s 超时、CPU 空转、或 `address already in use`，见：
+
+**[TROUBLESHOOTING_HANGS.md](./TROUBLESHOOTING_HANGS.md)**
+
+（含驱动 mismatch、跨线程 CUDA、术语表 finalize 死循环、端口占用等完整原因与修复。）
