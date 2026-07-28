@@ -44,8 +44,8 @@ ARANGO_PASSWORD = os.environ.get("ARANGO_PASSWORD", "")
 TRANSLATE_URL = os.environ.get("TRANSLATE_URL", "http://127.0.0.1:8022").rstrip("/")
 COLLECTION = "my_nyz_article"
 
-# 单条翻译超时（秒）。27B 长段落可能很慢，按需加大
-TRANSLATE_TIMEOUT = int(os.environ.get("TRANSLATE_TIMEOUT", "1800"))
+# 单条 HTTP 读超时（秒）。0 = 不限制，等服务端译完（超长 text 字段可能很久）
+TRANSLATE_TIMEOUT = int(os.environ.get("TRANSLATE_TIMEOUT", "0"))
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROGRESS_DIR = SCRIPT_DIR / ".zj_progress"
@@ -115,6 +115,18 @@ def clear_progress(article_key: str) -> None:
         print(f"  checkpoint cleared: {path.name}")
 
 
+def _print_failure_summary(failures: list[dict[str, str]]) -> None:
+    """打印失败文章标题与原因，便于对照续跑。"""
+    if not failures:
+        print("\n失败文章汇总: 无")
+        return
+    print(f"\n======== 失败文章汇总（共 {len(failures)} 篇）========")
+    for i, item in enumerate(failures, 1):
+        print(f"{i}. [{item.get('key')}] {item.get('title')}")
+        print(f"   原因: {item.get('reason')}")
+    print("======== 汇总结束 ========")
+
+
 def collect_text_nodes(content: Any, out: list[dict]) -> None:
     """递归收集 content 树里 type==text 且非空的节点（原地引用，便于回写）。"""
     if not isinstance(content, list):
@@ -130,8 +142,19 @@ def collect_text_nodes(content: Any, out: list[dict]) -> None:
             collect_text_nodes(item.get("content"), out)
 
 
+def _http_timeout() -> float | tuple[float, float | None] | None:
+    """requests timeout：连接 30s；读超时 0/负数表示无限等待。"""
+    if TRANSLATE_TIMEOUT and TRANSLATE_TIMEOUT > 0:
+        return TRANSLATE_TIMEOUT
+    return (30, None)
+
+
 def translate_one(text: str, source_lang: str = "zh", target_lang: str = "en") -> str:
-    """单条翻译，失败抛异常。"""
+    """单条翻译，失败抛异常。
+
+    标点/符号等极短片段（如「）。」「\\」）模型常返回空字符串且 status=success。
+    这类情况回退为原文，避免整篇文章被当成失败中止。
+    """
     url = f"{TRANSLATE_URL}/api/translate"
     payload = {
         "text": text,
@@ -139,15 +162,19 @@ def translate_one(text: str, source_lang: str = "zh", target_lang: str = "en") -
         "target_lang": target_lang,
         "use_glossary": True,
     }
-    r = requests.post(url, json=payload, timeout=TRANSLATE_TIMEOUT)
+    r = requests.post(url, json=payload, timeout=_http_timeout())
     if r.status_code >= 400:
         raise RuntimeError(f"translate HTTP {r.status_code}: {r.text[:500]}")
     data = r.json()
-    if data.get("status") != "success" or not data.get("result"):
+    if data.get("status") != "success":
         raise RuntimeError(
             f"translate failed: {json.dumps(data, ensure_ascii=False)[:500]}"
         )
-    return data["result"]
+    result = data.get("result")
+    if result:
+        return result
+    # success 但空译文：保留原文（常见于纯标点/转义符）
+    return text
 
 
 def translate_many_with_checkpoint(
@@ -181,7 +208,14 @@ def translate_many_with_checkpoint(
         print(f"  [{label}] {i + 1}/{total}  len={len(text)}  {preview!r}")
         t0 = time.time()
         translated = translate_one(text)
-        print(f"    ok  {int((time.time() - t0) * 1000)} ms  -> {len(translated)} chars")
+        elapsed_ms = int((time.time() - t0) * 1000)
+        if translated == text and len(text.strip()) <= 8:
+            print(
+                f"    keep-original  {elapsed_ms} ms  "
+                f"(empty model output for short/symbol text)"
+            )
+        else:
+            print(f"    ok  {elapsed_ms} ms  -> {len(translated)} chars")
         results[i] = translated
         cache[key] = translated
         save_progress(article_key, progress)
@@ -340,15 +374,21 @@ def main() -> int:
             clear_progress(key)
 
     print(f"articles ({len(keys)}): {keys}")
+    print(f"translate HTTP timeout: {'unlimited' if not TRANSLATE_TIMEOUT else f'{TRANSLATE_TIMEOUT}s'}")
     t_start = time.time()
     ok, fail = 0, 0
+    failures: list[dict[str, str]] = []
 
     for i, key in enumerate(keys, 1):
         article = fetch_article(db, key)
         if not article:
+            reason = "文档不存在 / 查询未返回"
             print(f"[{i}/{len(keys)}] skip missing {key}")
             fail += 1
+            failures.append({"key": key, "title": "(missing)", "reason": reason})
             continue
+
+        title = str(article.get("title") or "").strip() or "(无标题)"
 
         # 已完成的文章（手动指定 --article-key 时也可能已有标记）
         if article.get("hasZhangJun") == 1 and not args.article_key:
@@ -356,7 +396,7 @@ def main() -> int:
             clear_progress(key)
             continue
 
-        print(f"\n======= [{i}/{len(keys)}] {key}  {article.get('title')} =======")
+        print(f"\n======= [{i}/{len(keys)}] {key}  {title} =======")
         try:
             patch = translate_article(article, key)
             if args.dry_run:
@@ -374,19 +414,40 @@ def main() -> int:
             ok += 1
         except KeyboardInterrupt:
             print("\n  interrupted — checkpoint 已保存，重跑同一命令即可续传")
+            _print_failure_summary(failures)
             return 130
         except Exception as e:
             fail += 1
+            reason = str(e)
+            failures.append({"key": key, "title": title, "reason": reason})
             print(f"  FAILED: {e}")
             print("  checkpoint 保留，修好后重跑可续传")
             try:
                 requests.get(f"{TRANSLATE_URL}/health", timeout=5)
-            except Exception:
-                print("  翻译服务疑似挂掉，停止后续文章")
+            except Exception as he:
+                print(f"  翻译服务疑似挂掉，停止后续文章 ({he})")
+                # 未跑到的文章也记一笔，便于对照
+                for j in range(i, len(keys)):
+                    rest_key = keys[j]
+                    if rest_key == key:
+                        continue
+                    rest = fetch_article(db, rest_key)
+                    rest_title = (
+                        str((rest or {}).get("title") or "").strip() or "(无标题)"
+                    )
+                    failures.append(
+                        {
+                            "key": rest_key,
+                            "title": rest_title,
+                            "reason": f"未执行：翻译服务不可用（前序失败后中止），前序: {key}",
+                        }
+                    )
+                    fail += 1
                 break
 
     elapsed = int((time.time() - t_start) * 1000)
     print(f"\n------------------- done {elapsed} ms  ok={ok} fail={fail} -------------------")
+    _print_failure_summary(failures)
     return 0 if fail == 0 else 1
 
 

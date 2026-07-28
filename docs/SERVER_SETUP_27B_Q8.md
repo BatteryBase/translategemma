@@ -57,3 +57,5 @@ V100 为 compute capability 70。
 **[TROUBLESHOOTING_HANGS.md](./TROUBLESHOOTING_HANGS.md)**
 
 （含驱动 mismatch、跨线程 CUDA、术语表 finalize 死循环、端口占用等完整原因与修复。）
+
+相对原版（neosun100）多了哪些文件与功能：见 [`CHANGES_FROM_UPSTREAM.md`](./CHANGES_FROM_UPSTREAM.md)。
